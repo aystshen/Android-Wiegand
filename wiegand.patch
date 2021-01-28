@@ -1,0 +1,584 @@
+diff --git a/device/rockchip/common/device.mk b/device/rockchip/common/device.mk
+index 797f787..e99585f 100755
+--- a/device/rockchip/common/device.mk
++++ b/device/rockchip/common/device.mk
+@@ -365,9 +365,10 @@ PRODUCT_PACKAGES += \
+ 	
+ # Topband HAL
+ PRODUCT_PACKAGES += \
+ 	gpio.default \
+ 	mcu.default \
+ 	modem.default \
++	wiegand.default
+ 
+ # iep
+ ifneq ($(filter rk3188 rk3190 rk3026 rk3288 rk312x rk3126c rk3128 px3se rk3368 rk3326 rk3328 rk3366 rk3399, $(strip $(TARGET_BOARD_PLATFORM))), )
+diff --git a/frameworks/base/Android.mk b/frameworks/base/Android.mk
+index 7c3febd..7c4f6c1 100755
+--- a/frameworks/base/Android.mk
++++ b/frameworks/base/Android.mk
+@@ -278,6 +278,7 @@ LOCAL_SRC_FILES += \
+ 	core/java/android/os/IVibratorService.aidl \
+ 	core/java/android/os/IGpioService.aidl \
+ 	core/java/android/os/IMcuService.aidl \
++	core/java/android/os/IWiegandService.aidl \
+ 	core/java/android/os/IModemService.aidl \
+ 	core/java/android/os/ILightsService.aidl \
+ 	core/java/android/os/storage/IStorageManager.aidl \
+diff --git a/frameworks/base/core/java/android/app/SystemServiceRegistry.java b/frameworks/base/core/java/android/app/SystemServiceRegistry.java
+index 386d0d0..7aae986 100755
+--- a/frameworks/base/core/java/android/app/SystemServiceRegistry.java
++++ b/frameworks/base/core/java/android/app/SystemServiceRegistry.java
+@@ -121,6 +121,7 @@ import android.os.UserManager;
+ import android.os.Vibrator;
+ import android.os.SystemGpio;
+ import android.os.SystemMcu;
++import android.os.SystemWiegand;
+ import android.os.SystemModem;
+ import android.os.SystemLights;
+ import android.os.health.SystemHealthManager;
+@@ -554,7 +555,14 @@ final class SystemServiceRegistry {
+             public SystemMcu createService(ContextImpl ctx) {
+                 return new SystemMcu(ctx);
+             }});
++
++        registerService(Context.WIEGAND_SERVICE, SystemWiegand.class,
++                new CachedServiceFetcher<SystemWiegand>() {
++            @Override
++            public SystemWiegand createService(ContextImpl ctx) {
++                return new SystemWiegand(ctx);
++            }});
++
+         registerService(Context.MODEM_SERVICE, SystemModem.class,
+                 new CachedServiceFetcher<SystemModem>() {
+             @Override
+diff --git a/frameworks/base/core/java/android/content/Context.java b/frameworks/base/core/java/android/content/Context.java
+index dd4c380..9f1a720 100755
+--- a/frameworks/base/core/java/android/content/Context.java
++++ b/frameworks/base/core/java/android/content/Context.java
+@@ -3355,6 +3355,7 @@ public abstract class Context {
+     
+     public static final String GPIO_SERVICE = "gpio";
+     public static final String MCU_SERVICE = "mcu";
++    public static final String WIEGAND_SERVICE = "wiegand";
+     public static final String MODEM_SERVICE = "modem";
+     public static final String LIGHTS_SERVICE = "lights";
+ 
+diff --git a/frameworks/base/core/java/android/os/IWiegandService.aidl b/frameworks/base/core/java/android/os/IWiegandService.aidl
+new file mode 100755
+index 0000000..be7de99
+--- /dev/null
++++ b/frameworks/base/core/java/android/os/IWiegandService.aidl
+@@ -0,0 +1,11 @@
++package android.os;
++ 
++/** {@hide} */
++interface IWiegandService
++{
++	int setReadFormat(int format);
++	int setWriteFormat(int format);
++	int read();
++	int write(int data);
++}
++
+diff --git a/frameworks/base/core/java/android/os/SystemWiegand.java b/frameworks/base/core/java/android/os/SystemWiegand.java
+new file mode 100755
+index 0000000..2e88ef7
+--- /dev/null
++++ b/frameworks/base/core/java/android/os/SystemWiegand.java
+@@ -0,0 +1,59 @@
++
++package android.os;
++
++import android.content.Context;
++import android.media.AudioAttributes;
++import android.util.Log;
++
++/**
++ * wiegand control.
++ * <p>
++ * {@hide}
++ */
++public class SystemWiegand {
++    private static final String TAG = "wiegand";
++
++    private final IWiegandService mService;
++
++    public SystemWiegand() {
++        mService = IWiegandService.Stub.asInterface(
++                ServiceManager.getService("wiegand"));
++    }
++
++    public SystemWiegand(Context context) {
++        mService = IWiegandService.Stub.asInterface(
++                ServiceManager.getService("wiegand"));
++    }
++
++    public int setReadFormat(int format) {
++        try {
++            return mService.setReadFormat(format);
++        } catch (Exception e) {
++            return -1;
++        }
++    }
++
++    public int setWriteFormat(int format) {
++        try {
++            return mService.setWriteFormat(format);
++        } catch (Exception e) {
++            return -1;
++        }
++    }
++
++    public int read() {
++        try {
++            return mService.read();
++        } catch (Exception e) {
++            return -1;
++        }
++    }
++
++    public int write(int data) {
++        try {
++            return mService.write(data);
++        } catch (Exception e) {
++            return -1;
++        }
++    }
++}
+diff --git a/frameworks/base/services/core/java/com/android/server/WiegandService.java b/frameworks/base/services/core/java/com/android/server/WiegandService.java
+new file mode 100755
+index 0000000..bdc1a03
+--- /dev/null
++++ b/frameworks/base/services/core/java/com/android/server/WiegandService.java
+@@ -0,0 +1,39 @@
++package com.android.server;
++import android.os.IWiegandService;
++
++public class WiegandService extends IWiegandService.Stub
++{
++    private static final String TAG = "wiegandService";
++
++    public int setReadFormat(int format) throws android.os.RemoteException
++    {
++        return native_wiegandSetReadFormat(format);
++    }
++
++    public int setWriteFormat(int format) throws android.os.RemoteException
++    {
++        return native_wiegandSetWriteFormat(format);
++    }
++
++    public int read() throws android.os.RemoteException
++    {
++        return native_wiegandRead();
++    }
++
++    public int write(int data) throws android.os.RemoteException
++    {
++        return native_wiegandWrite(data);
++    }
++
++    public WiegandService()
++    {
++        native_wiegandOpen();
++    }
++
++    public static native int native_wiegandOpen();
++    public static native void native_wiegandClose();
++    public static native int native_wiegandSetReadFormat(int format);
++    public static native int native_wiegandSetWriteFormat(int format);
++    public static native int native_wiegandRead();
++    public static native int native_wiegandWrite(int data);
++}
+diff --git a/frameworks/base/services/core/jni/Android.mk b/frameworks/base/services/core/jni/Android.mk
+index 9e0e465..85a9639 100755
+--- a/frameworks/base/services/core/jni/Android.mk
++++ b/frameworks/base/services/core/jni/Android.mk
+@@ -39,6 +39,7 @@ LOCAL_SRC_FILES += \
+     $(LOCAL_REL_DIR)/com_android_server_UsbHostManager.cpp \
+     $(LOCAL_REL_DIR)/com_android_server_VibratorService.cpp \
+     $(LOCAL_REL_DIR)/com_android_server_GpioService.cpp \
++    $(LOCAL_REL_DIR)/com_android_server_WiegandService.cpp \
+     $(LOCAL_REL_DIR)/com_android_server_McuService.cpp \
+     $(LOCAL_REL_DIR)/com_android_server_ModemService.cpp \
+     $(LOCAL_REL_DIR)/com_android_server_PersistentDataBlockService.cpp \
+diff --git a/frameworks/base/services/core/jni/com_android_server_WiegandService.cpp b/frameworks/base/services/core/jni/com_android_server_WiegandService.cpp
+new file mode 100755
+index 0000000..2fad7cc
+--- /dev/null
++++ b/frameworks/base/services/core/jni/com_android_server_WiegandService.cpp
+@@ -0,0 +1,90 @@
++#include "jni.h"
++#include "JNIHelp.h"
++#include "android_runtime/AndroidRuntime.h"
++#include <utils/misc.h>
++#include <utils/Log.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <fcntl.h>
++#include <sys/ioctl.h>
++#include <hardware/wiegand_hal.h>
++
++namespace android
++{
++
++static struct wiegand_device_t* wiegandDevice;
++
++jint wiegandOpen(JNIEnv *env, jobject cls)
++{
++    jint err;
++    hw_module_t* module;
++    hw_device_t* device;
++
++    ALOGI("native wiegandOpen ...");
++
++    // hw_get_module finds the library by "wiegand" (this is the id of hal)
++    err = hw_get_module("wiegand", (hw_module_t const**)&module);
++    if(err == 0) {
++        // Get device : module->methods->open
++        err = module->methods->open(module, NULL, &device);
++        if(err == 0) {
++            // Call wiegand_open
++            wiegandDevice = (wiegand_device_t *)device;
++            return wiegandDevice->wiegand_open(wiegandDevice);
++        } else {
++            return -1;
++        }
++    }
++
++    return -1;
++}
++
++void wiegandClose(JNIEnv *env, jobject cls)
++{
++    ALOGI("native wiegandClose ...");
++}
++
++jint wiegandSetReadFormat(JNIEnv *env, jobject cls, jint format)
++{
++    ALOGI("native wiegandSetReadFormat format=%d", format);
++    return wiegandDevice->wiegand_set_read_format(wiegandDevice, format);
++}
++
++jint wiegandSetWriteFormat(JNIEnv *env, jobject cls, jint format)
++{
++    ALOGI("native wiegandSetWriteFormat format=%d", format);
++    return wiegandDevice->wiegand_set_write_format(wiegandDevice, format);
++}
++
++jint wiegandRead(JNIEnv *env, jobject cls)
++{
++    ALOGI("native wiegandRead");
++    return wiegandDevice->wiegand_read(wiegandDevice);
++}
++
++jint wiegandWrite(JNIEnv *env, jobject cls, jint data)
++{
++    ALOGI("native wiegandWrite data=%d", data);
++    return wiegandDevice->wiegand_write(wiegandDevice, data);
++}
++
++// Register native methods
++static const JNINativeMethod methods[] = {
++    {"native_wiegandOpen", "()I", (void *)wiegandOpen},
++    {"native_wiegandClose", "()V", (void *)wiegandClose},
++    {"native_wiegandSetReadFormat", "(I)I", (void *)wiegandSetReadFormat},
++    {"native_wiegandSetWriteFormat", "(I)I", (void *)wiegandSetWriteFormat},
++    {"native_wiegandRead", "()I", (void *)wiegandRead},
++    {"native_wiegandWrite", "(I)I", (void *)wiegandWrite},
++};
++
++int register_android_server_WiegandService(JNIEnv *env)
++{
++    // The Java method corresponding to the local method WiegandService
++    return jniRegisterNativeMethods(env, "com/android/server/WiegandService",
++                                    methods, NELEM(methods));
++}
++
++}
+diff --git a/frameworks/base/services/core/jni/onload.cpp b/frameworks/base/services/core/jni/onload.cpp
+index 182e0f3..5e56fc5 100755
+--- a/frameworks/base/services/core/jni/onload.cpp
++++ b/frameworks/base/services/core/jni/onload.cpp
+@@ -41,6 +41,7 @@ int register_android_server_vr_VrManagerService(JNIEnv* env);
+ int register_android_server_VibratorService(JNIEnv* env);
+ int register_android_server_GpioService(JNIEnv* env);
+ int register_android_server_McuService(JNIEnv* env);
++int register_android_server_WiegandService(JNIEnv* env);
+ int register_android_server_ModemService(JNIEnv* env);
+ int register_android_server_location_ContextHubService(JNIEnv* env);
+ int register_android_server_location_GnssLocationProvider(JNIEnv* env);
+@@ -87,6 +88,7 @@ extern "C" jint JNI_OnLoad(JavaVM* vm, void* /* reserved */)
+     register_android_server_VibratorService(env);
+     register_android_server_GpioService(env);
+     register_android_server_McuService(env);
++    register_android_server_WiegandService(env);
+     register_android_server_ModemService(env);
+     register_android_server_SystemServer(env);
+     register_android_server_location_ContextHubService(env);
+diff --git a/frameworks/base/services/java/com/android/server/SystemServer.java b/frameworks/base/services/java/com/android/server/SystemServer.java
+index a96f881..d710526 100755
+--- a/frameworks/base/services/java/com/android/server/SystemServer.java
++++ b/frameworks/base/services/java/com/android/server/SystemServer.java
+@@ -815,8 +815,13 @@ public final class SystemServer {
+             McuService mcu = new McuService();
+             ServiceManager.addService("mcu", mcu);
+             traceEnd();
++
++            traceBeginAndSlog("StartWiegandService");
++            WiegandService wiegand = new WiegandService();
++            ServiceManager.addService("wiegand", wiegand);
++            traceEnd();
++
+             traceBeginAndSlog("StartModemService");
+             ModemService modem = new ModemService();
+             ServiceManager.addService("modem", modem);
+             traceEnd();
+diff --git a/hardware/libhardware/include/hardware/wiegand_hal.h b/hardware/libhardware/include/hardware/wiegand_hal.h
+new file mode 100755
+index 0000000..68af997
+--- /dev/null
++++ b/hardware/libhardware/include/hardware/wiegand_hal.h
+@@ -0,0 +1,21 @@
++#ifndef ANDROID_wiegand_INTERFACE_H
++#define ANDROID_wiegand_INTERFACE_H
++
++#include <stdint.h>
++#include <sys/cdefs.h>
++#include <sys/types.h>
++#include <hardware/hardware.h>
++
++__BEGIN_DECLS
++struct wiegand_device_t {
++    struct hw_device_t common;
++    int (*wiegand_open)(struct wiegand_device_t* dev);
++    int (*wiegand_set_read_format)(struct wiegand_device_t* dev, int format);
++    int (*wiegand_set_write_format)(struct wiegand_device_t* dev, int format);
++    int (*wiegand_read)(struct wiegand_device_t* dev);
++    int (*wiegand_write)(struct wiegand_device_t* dev, int data);
++};
++
++__END_DECLS
++
++#endif  // ANDROID_wiegand_INTERFACE_H
+diff --git a/hardware/libhardware/modules/Android.mk b/hardware/libhardware/modules/Android.mk
+index d998ef9..488b68a 100755
+--- a/hardware/libhardware/modules/Android.mk
++++ b/hardware/libhardware/modules/Android.mk
+@@ -13,5 +13,6 @@ hardware_modules := \
+     vr \
+     gpio \
+     mcu \
+     modem \
++    wiegand
+ include $(call all-named-subdir-makefiles,$(hardware_modules))
+diff --git a/hardware/libhardware/modules/wiegand/Android.mk b/hardware/libhardware/modules/wiegand/Android.mk
+new file mode 100755
+index 0000000..4a60822
+--- /dev/null
++++ b/hardware/libhardware/modules/wiegand/Android.mk
+@@ -0,0 +1,29 @@
++# Copyright (C) 2012 The Android Open Source Project
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++LOCAL_PATH := $(call my-dir)
++
++include $(CLEAR_VARS)
++
++LOCAL_MODULE := wiegand.default
++
++LOCAL_MODULE_RELATIVE_PATH := hw
++LOCAL_PROPRIETARY_MODULE := true
++LOCAL_SRC_FILES := wiegand_hal.c
++LOCAL_HEADER_LIBRARIES := libhardware_headers
++LOCAL_SHARED_LIBRARIES := liblog libcutils libutils
++LOCAL_MODULE_TAGS := optional
++
++include $(BUILD_SHARED_LIBRARY)
++
+diff --git a/hardware/libhardware/modules/wiegand/wiegand_hal.c b/hardware/libhardware/modules/wiegand/wiegand_hal.c
+new file mode 100755
+index 0000000..11e5b10
+--- /dev/null
++++ b/hardware/libhardware/modules/wiegand/wiegand_hal.c
+@@ -0,0 +1,153 @@
++#include <hardware/hardware.h>
++#include <cutils/log.h>
++#include <stdio.h>
++#include <unistd.h>
++#include <fcntl.h>
++#include <errno.h>
++#include <hardware/wiegand_hal.h>
++#include <stdlib.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <sys/ioctl.h>
++#include <utils/Log.h>
++
++#define WIEGAND_IN_DEV_NAME "/dev/wiegand_in"
++#define WIEGAND_OUT_DEV_NAME "/dev/wiegand_out"
++
++/* ioctl command */
++#define WIEGAND_IOC_MAGIC  'w'
++
++#define WIEGAND_PULSE_WIDTH     _IOW(WIEGAND_IOC_MAGIC, 1, int)
++#define WIEGAND_PULSE_INTERVAL  _IOW(WIEGAND_IOC_MAGIC, 2, int)
++#define WIEGAND_FORMAT          _IOW(WIEGAND_IOC_MAGIC, 3, int)
++#define WIEGAND_READ            _IOR(WIEGAND_IOC_MAGIC, 4, unsigned int)
++#define WIEGAND_WRITE           _IOW(WIEGAND_IOC_MAGIC, 5, unsigned int)
++#define WIEGAND_STATUS          _IOR(WIEGAND_IOC_MAGIC, 6, int)
++
++#define WIEGAND_IOC_MAXNR 6
++
++static int fd_in, fd_out;
++
++static int wiegand_close(struct hw_device_t* device)
++{
++    close(fd_in);
++    close(fd_out);
++    return 0;
++}
++
++static int wiegand_open(struct wiegand_device_t* dev)
++{
++    fd_in = open(WIEGAND_IN_DEV_NAME, O_RDWR);
++    fd_out = open(WIEGAND_OUT_DEV_NAME, O_RDWR);
++    ALOGI("wiegand_open: in: %d, out: %d", fd_in, fd_out);
++
++    if(fd_in >= 0 || fd_out >= 0) {
++        return 0;
++    } else {
++        return -1;
++    }
++}
++
++static int wiegand_set_read_format(struct wiegand_device_t* dev, int format)
++{
++    int ret = 0;
++    int value = format;
++ 
++    if(fd_in < 0) {
++        fd_in = open(WIEGAND_IN_DEV_NAME, O_RDWR);
++        if (fd_in < 0) {
++            return -1;
++        }
++    }
++
++    ret = ioctl(fd_in, WIEGAND_FORMAT, &value);
++    ALOGI("wiegand_set_read_format: value=%d, ret=%d", value, ret);
++
++    return ret;
++}
++
++static int wiegand_set_write_format(struct wiegand_device_t* dev, int format)
++{
++    int ret = 0;
++    int value = format;
++ 
++    if(fd_out < 0) {
++        fd_out = open(WIEGAND_OUT_DEV_NAME, O_RDWR);
++        if (fd_out < 0) {
++            return -1;
++        }
++    }
++
++    ret = ioctl(fd_out, WIEGAND_FORMAT, &value);
++    ALOGI("wiegand_set_write_format: value=%d, ret=%d", value, ret);
++
++    return ret;
++}
++
++static int wiegand_read(struct wiegand_device_t* dev)
++{
++    int ret = 0;
++    unsigned int value = 0;
++
++    if(fd_in < 0) {
++        fd_in = open(WIEGAND_IN_DEV_NAME, O_RDWR);
++        if (fd_in < 0) {
++            return -1;
++        }
++    }
++
++    ret = ioctl(fd_in, WIEGAND_READ, &value);
++    ALOGI("wiegand_read: value=0x%04xd, ret=%d", value, ret);
++    if (ret >= 0) {
++        ret = value;
++    }
++
++    return ret;
++}
++
++static int wiegand_write(struct wiegand_device_t* dev, int data)
++{
++    int ret = 0;
++    unsigned int value = data;
++
++    if(fd_out < 0) {
++        fd_out = open(WIEGAND_OUT_DEV_NAME, O_RDWR);
++        if (fd_out < 0) {
++            return -1;
++        }
++    }
++
++    ret = ioctl(fd_out, WIEGAND_WRITE, &value);
++    ALOGI("wiegand_write: data=0x%04x, ret=%d", data, ret);
++
++    return ret;
++}
++
++static struct wiegand_device_t wiegand_dev = {
++    .common = {
++        .tag   = HARDWARE_DEVICE_TAG,
++        .close = wiegand_close,
++    },
++    .wiegand_open  = wiegand_open,
++    .wiegand_set_read_format  = wiegand_set_read_format,
++    .wiegand_set_write_format  = wiegand_set_write_format,
++    .wiegand_read  = wiegand_read,
++    .wiegand_write  = wiegand_write
++};
++
++static int wiegand_device_open(const struct hw_module_t* module, const char* id,
++                           struct hw_device_t** device)
++{
++    *device = &wiegand_dev;
++    return 0;
++}
++
++static struct hw_module_methods_t wiegand_module_methods = {
++    .open = wiegand_device_open,
++};
++
++struct hw_module_t HAL_MODULE_INFO_SYM = {
++    .tag = HARDWARE_MODULE_TAG,
++    .id = "wiegand",
++    .methods = &wiegand_module_methods,
++};
+diff --git a/system/core/rootdir/ueventd.rc b/system/core/rootdir/ueventd.rc
+index c386231..f233729 100755
+--- a/system/core/rootdir/ueventd.rc
++++ b/system/core/rootdir/ueventd.rc
+@@ -69,6 +69,8 @@ subsystem sound
+ /dev/topband_gpio         0666   system     system
+ /dev/n76e003              0666   system     system
+ /dev/tb_4g                0666   system     system
++/dev/wiegand_in           0666   system     system
++/dev/wiegand_out          0666   system     system
+ 
+ # these should not be world writable
+ /dev/diag                 0660   radio      radio

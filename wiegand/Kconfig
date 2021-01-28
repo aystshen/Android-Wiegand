@@ -1,0 +1,8 @@
+#
+#  Wiegand driver configuration
+#
+config WIEGAND_DRIVER
+       tristate  "Wiegand driver"    
+       default n
+       help
+           Wiegand driver for application control
