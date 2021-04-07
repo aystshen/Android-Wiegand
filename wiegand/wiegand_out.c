@@ -217,11 +217,15 @@ static int wiegand_out_add_parity_bits(struct wiegand_out_dev *wiegand_out)
         // First 12 bits even parity
         if (even_parity_26(data)) {
             data = 0x01000000 | data;
+        } else {
+            data = 0x00ffffff & data;
         }
 
         // After 12 bits odd parity
         if (odd_parity_26(data)) {
             data = (data << 1) | 0x00000001;
+        } else {
+            data = (data << 1) & 0x01fffffe;
         }
         
         tmp[0] = data << 6;
@@ -234,9 +238,9 @@ static int wiegand_out_add_parity_bits(struct wiegand_out_dev *wiegand_out)
 
         // First 16 bits even parity
         if (even_parity_34(data)) {
-            tmp[0] = 0x80000000 | (data >> 1);
+            tmp[0] = (data >> 1) | 0x80000000;
         } else {
-            tmp[0] = data >> 1;
+            tmp[0] = (data >> 1) & 0x7fffffff;
         }
 
         tmp[1] = (data & 0x00000001) << 31;
@@ -244,6 +248,8 @@ static int wiegand_out_add_parity_bits(struct wiegand_out_dev *wiegand_out)
         // After 16 bits odd parity
         if (odd_parity_34(data)) {
             tmp[1] |= 0x40000000;
+        } else {
+            tmp[1] &= 0xbfffffff;
         }
 
         // Use data with parity bits

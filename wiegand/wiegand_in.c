@@ -243,6 +243,11 @@ static long wiegand_in_ioctl(struct file *filp, unsigned int cmd, unsigned long 
             }
 
         case WIEGAND_READ: {
+                if (wait_event_interruptible(wiegand_in->wq,
+                                             (wiegand_in->wiegand_in_data[0] > 0) 
+                                             || (wiegand_in->error))) {
+                    return -ERESTARTSYS;
+                }
                 data = wiegand_in_rm_parity_bits(wiegand_in);
                 if (copy_to_user((int *)arg, &data, sizeof(int))) {
                     return -EFAULT;
@@ -253,7 +258,8 @@ static long wiegand_in_ioctl(struct file *filp, unsigned int cmd, unsigned long 
                             wiegand_in->wiegand_in_data[0],
                             wiegand_in->wiegand_in_data[1],
                             data);
-                
+
+                wiegand_in->error = 0;
                 wiegand_in->wiegand_in_data[0] = 0;
                 wiegand_in->wiegand_in_data[1] = 0;
                 break;
@@ -323,7 +329,7 @@ static void wiegand_in_reset_timer(struct wiegand_in_dev *wiegand_in)
 
 static int wiegand_in_check_irq(struct wiegand_in_dev *wiegand_in)
 {
-    int diff;
+    long diff;
 
     if (wiegand_in->recvd_length < 0) {
         do_gettimeofday(&wiegand_in->latest);
@@ -333,9 +339,14 @@ static int wiegand_in_check_irq(struct wiegand_in_dev *wiegand_in)
     /* Check how much time we have used already */
     do_gettimeofday(&wiegand_in->now);
     diff = wiegand_in->now.tv_usec - wiegand_in->latest.tv_usec;
+    if (diff < 0) {
+        diff = wiegand_in->pulse_width;
+    }
 
     /* check fake interrupt */
-    if (diff < wiegand_in->pulse_width) { //+ wiegand_in->pulse_intval - DEVIATION)
+    if (diff < wiegand_in->pulse_width - DEVIATION) {
+        dev_err(wiegand_in->dev, "%s: Pulse width is required: %d, actually: %ld, now: %ld, latest: %ld\n", 
+            __func__, wiegand_in->pulse_width, diff, wiegand_in->now.tv_usec, wiegand_in->latest.tv_usec);
         return -1;
     }
     /*
@@ -345,6 +356,8 @@ static int wiegand_in_check_irq(struct wiegand_in_dev *wiegand_in)
      */
     else if (diff > wiegand_in->pulse_width + wiegand_in->pulse_intval
              + ((wiegand_in->pulse_width + wiegand_in->pulse_intval) << 1)) {
+        dev_err(wiegand_in->dev, "%s: Pulse width is required: %d, actually: %ld\n", 
+            __func__, wiegand_in->pulse_width, diff);
         hrtimer_cancel(&wiegand_in->timer);
         wiegand_in_data_reset(wiegand_in);
         return -1;
